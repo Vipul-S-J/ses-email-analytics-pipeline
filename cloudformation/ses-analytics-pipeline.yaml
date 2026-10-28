@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Amazon SES email analytics pipeline. Captures SES sending events and streams
+  them through Kinesis Data Firehose into S3 for analysis with Athena.
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Name of the S3 bucket that stores SES event data.
+
+  StreamName:
+    Type: String
+    Default: aws-ses-analytics-firehose
+    Description: Name of the Kinesis Data Firehose delivery stream.
+
+  ConfigSetName:
+    Type: String
+    Default: ses-dashboard
+    Description: Name of the SES configuration set.
+
+  S3Prefix:
+    Type: String
+    Default: raw/
+    Description: Prefix under which Firehose writes objects in the bucket.
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # S3 bucket for SES event data
+  # ---------------------------------------------------------------------------
+  EventsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ---------------------------------------------------------------------------
+  # IAM role allowing Firehose to write to the S3 bucket
+  # ---------------------------------------------------------------------------
+  FirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${StreamName}-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub '${StreamName}-s3-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:PutObject
+                Resource:
+                  - !GetAtt EventsBucket.Arn
+                  - !Sub '${EventsBucket.Arn}/*'
+
+  # ---------------------------------------------------------------------------
+  # Kinesis Data Firehose delivery stream -> S3
+  # ---------------------------------------------------------------------------
+  FirehoseStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Ref StreamName
+      DeliveryStreamType: DirectPut
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !GetAtt EventsBucket.Arn
+        RoleARN: !GetAtt FirehoseRole.Arn
+        Prefix: !Ref S3Prefix
+        CompressionFormat: UNCOMPRESSED
+        BufferingHints:
+          IntervalInSeconds: 300  # 5 minutes
+          SizeInMBs: 5            # 5 MiB
+
+  # ---------------------------------------------------------------------------
+  # IAM role allowing SES to publish to Firehose
+  # ---------------------------------------------------------------------------
+  SesToFirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ConfigSetName}-ses-firehose-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub '${ConfigSetName}-ses-firehose-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - firehose:PutRecord
+                  - firehose:PutRecordBatch
+                Resource: !GetAtt FirehoseStream.Arn
+
+  # ---------------------------------------------------------------------------
+  # SES configuration set + Firehose event destination
+  # ---------------------------------------------------------------------------
+  ConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Ref ConfigSetName
+
+  EventDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref ConfigurationSet
+      EventDestination:
+        Name: firehose-destination
+        Enabled: true
+        MatchingEventTypes:
+          - send
+          - delivery
+          - reject
+          - bounce
+          - complaint
+          - open
+          - click
+          - renderingFailure
+        KinesisFirehoseDestination:
+          DeliveryStreamARN: !GetAtt FirehoseStream.Arn
+          IAMRoleARN: !GetAtt SesToFirehoseRole.Arn
+
+Outputs:
+  S3Bucket:
+    Description: S3 bucket storing SES event data
+    Value: !Ref EventsBucket
+
+  FirehoseStreamName:
+    Description: Kinesis Data Firehose delivery stream name
+    Value: !Ref FirehoseStream
+
+  ConfigurationSetName:
+    Description: SES configuration set to assign to a verified identity
+    Value: !Ref ConfigurationSet
