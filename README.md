@@ -12,17 +12,7 @@ This lets you build dashboards and run SQL analytics on your email engagement an
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    SES["📧 Amazon SES<br/>(send email)"]
-    FH["🔥 Kinesis Data Firehose<br/>(buffer: 5 min / 5 MiB)"]
-    S3["🪣 Amazon S3<br/>(raw JSON, partitioned by date)"]
-    ATH["🔎 Amazon Athena<br/>(SQL analytics)"]
-
-    SES -->|publish events via config set| FH
-    FH -->|deliver records| S3
-    S3 -->|query external table| ATH
-```
+![Architecture diagram: Amazon SES publishes events to Amazon Data Firehose, which delivers them to Amazon S3 for querying with Amazon Athena](docs/architecture.svg)
 
 1. An SES **configuration set** is assigned to a verified identity (domain or email).
 2. SES publishes selected **event types** to a Kinesis Data Firehose delivery stream.
@@ -46,6 +36,7 @@ flowchart LR
 ├── LICENSE
 ├── .gitignore
 ├── docs/
+│   ├── architecture.svg                # Architecture diagram
 │   └── setup-guide.md                  # Step-by-step console walkthrough
 ├── cloudformation/                     # Infrastructure as Code (recommended)
 │   └── ses-analytics-pipeline.yaml
@@ -85,6 +76,7 @@ Follow the walkthrough in [`docs/setup-guide.md`](docs/setup-guide.md).
 
 - Firehose delivers to S3 every **5 minutes** or every **5 MiB**, whichever comes first.
 - All names, account IDs, and ARNs in this repo are **placeholders** — replace them with your own.
+- The architecture diagram uses the official [AWS Architecture Icons](https://aws.amazon.com/architecture/icons/).
 
 ## Reference
 
